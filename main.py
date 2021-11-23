@@ -9,7 +9,7 @@ from json import loads, dumps
 
 # TODO rest api
 # TODO add node for all cients
-# TODO fix small lag after reconnect
+# TODO fix small lag after reconnect prop. impossible without modifing lavalink/lavaplayer
 # TODO weighted track cache
 
 clients = {}
@@ -34,11 +34,11 @@ class Unbuffered:
         return getattr(self.stream, attr)
 
 class NyaLink:
-    def __init__(self, ws):
+    def __init__(self, ws, user_id):
         self.sesion = aiohttp.ClientSession()
         self.loop = asyncio.get_event_loop()
         self.ws: web.WebSocketResponse = ws
-        self.user_id = None # int(self.ws.headers['user_id'])
+        self.user_id = user_id
 
         self.closed = False
 
@@ -73,8 +73,8 @@ class NyaLink:
         if not data or 't' not in data:
             return
 
-        # TODO implement move resume
-        # TODO implement dc teardown
+        # TODO implement move resume done
+        # TODO implement dc teardown done
 
         if data['t'] == 'VOICE_SERVER_UPDATE':
             guild_id = int(data['d']['guild_id'])
@@ -158,7 +158,6 @@ class NyaLink:
     async def process_data(self, msg):
         print(f"procesing: {msg.data}")
         data = loads(msg.data)
-        self.user_id = int(data['user_id'])
         # client
         if data['op'] == "fetch_track":
             ...
@@ -260,12 +259,6 @@ class NyaLink:
 
             await self.ws.send_str(dumps(d))
 
-
-
-
-
-
-
     def close(self):
         self.closed = True
         self.listener.cancel()
@@ -294,7 +287,7 @@ async def websocket_handler(request):
         c.resume(ws)
     except Exception:
         print("creating client connection from:", user_id)
-        clients[user_id] = NyaLink(ws)
+        clients[user_id] = NyaLink(ws, user_id)
     await asyncio.Future()
 
 app = web.Application()
