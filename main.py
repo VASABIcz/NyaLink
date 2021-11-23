@@ -11,9 +11,15 @@ from json import loads, dumps
 # TODO add node for all cients
 # TODO fix small lag after reconnect prop. impossible without modifing lavalink/lavaplayer
 # TODO weighted track cache
-# TODO nodes var should be global so all clientscan acces all nodes
 # TODO make better load ballancing prop. use stats
 # TODO on node failure transfer players to new nodes
+# TODO maybe implement lavalink resuming
+# TODO maybe implement persistancy on exit cache meta data to (redis, ...) after reboot load and reconnect lavalink 
+# {
+#     "op": "configureResuming",
+#     "key": "myResumeKey",
+#     "timeout": 60
+# }
 
 clients = {}
 
