@@ -7,7 +7,7 @@ from player import Player
 import sys
 from json import loads, dumps
 
-# TODO rest api
+# TODO rest api (get_tracks, stats, player)
 # TODO add node for all cients
 # TODO fix small lag after reconnect prop. impossible without modifing lavalink/lavaplayer
 # TODO weighted track cache
