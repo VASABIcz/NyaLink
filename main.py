@@ -6,11 +6,12 @@ from node import Node
 from player import Player
 import sys
 from json import loads, dumps
+from cache import  Cache
 
-# TODO rest api
+# TODO rest api done
 # TODO add node for all cients
-# TODO fix small lag after reconnect
-# TODO weighted track cache
+# TODO fix small lag after reconnect impossible
+# TODO weighted track cache done
 
 clients = {}
 
@@ -34,11 +35,12 @@ class Unbuffered:
         return getattr(self.stream, attr)
 
 class NyaLink:
-    def __init__(self, ws):
-        self.sesion = aiohttp.ClientSession()
+    def __init__(self, ws, user_id, cache):
+        self.session = aiohttp.ClientSession()
         self.loop = asyncio.get_event_loop()
         self.ws: web.WebSocketResponse = ws
-        self.user_id = None # int(self.ws.headers['user_id'])
+        self.user_id = user_id # int(self.ws.headers['user_id'])
+        self.cache: Cache = cache
 
         self.closed = False
 
@@ -58,6 +60,7 @@ class NyaLink:
     def players(self):
         return self._get_players()
 
+
     def get_best_node(self):
         nodes = [n for n in self.nodes.values() if n.is_available]
         if not nodes:
@@ -65,6 +68,12 @@ class NyaLink:
 
         return sorted(nodes, key=lambda n: len(n.players))[0]
 
+    def get_best_stats_node(self):
+        nodes = [n for n in self.nodes.values() if n.is_available]
+        if not nodes:
+            return None
+
+        return sorted(nodes, key=lambda n: n.penalty)[0]
 
     def get_node(self, identifier: str):
         return self.nodes.get(identifier, None)
@@ -73,8 +82,8 @@ class NyaLink:
         if not data or 't' not in data:
             return
 
-        # TODO implement move resume
-        # TODO implement dc teardown
+        # TODO implement move resume done
+        # TODO implement dc teardown done
 
         if data['t'] == 'VOICE_SERVER_UPDATE':
             guild_id = int(data['d']['guild_id'])
@@ -100,7 +109,7 @@ class NyaLink:
                 print("player vs", player._voice_state)
                 await player._voice_state_update(data['d'])
 
-    def get_player(self, guild_id: int, *, cls=None, node_id=None, **kwargs):
+    def get_player(self, guild_id: int, **kwargs):
         players = self.players
 
         try:
@@ -110,20 +119,9 @@ class NyaLink:
         else:
             return player
 
-        if not cls:
-            cls = Player
-
-        if node_id:
-            node = self.get_node(identifier=node_id)
-
-            player = cls(node, **kwargs)
-            node.players[guild_id] = player
-
-            return player
-
         node = self.get_best_node()
 
-        player = cls(guild_id, node)
+        player = Player(guild_id, node)
         print(f"node players: {node.players}")
         node.players[guild_id] = player
 
@@ -139,7 +137,7 @@ class NyaLink:
         port = int(data['port'])
         user_id = self.user_id
         client = self
-        session = self.sesion
+        session = self.session
         rest_uri = data['rest_uri']
         password = data['password']
         region = data.get('region')
@@ -158,7 +156,6 @@ class NyaLink:
     async def process_data(self, msg):
         print(f"procesing: {msg.data}")
         data = loads(msg.data)
-        self.user_id = int(data['user_id'])
         # client
         if data['op'] == "fetch_track":
             ...
@@ -170,7 +167,7 @@ class NyaLink:
             ...
         # player
         elif data['op'] == "play":
-            guild_id= int(data['guild_id'])
+            guild_id = int(data['guild_id'])
             query = data['query']
             requester = data['requester']
             await self.get_player(guild_id).play_fetch(query, requester)
@@ -260,9 +257,10 @@ class NyaLink:
 
             await self.ws.send_str(dumps(d))
 
-
-
-
+        elif data['op'] == "move":
+            guild_id = int(data['guild_id'])
+            identifier = data.get('node', None)
+            await self.get_player(guild_id).change_node(identifier)
 
 
 
@@ -284,23 +282,146 @@ class NyaLink:
                 self.loop.create_task(self.process_data(msg))
 
 
-async def websocket_handler(request):
-    ws = web.WebSocketResponse()
-    await ws.prepare(request)
-    user_id = int(request.headers['user_id'])
-    try:
-        print("resuming client connection from:", user_id)
-        c = clients[user_id]
-        c.resume(ws)
-    except Exception:
-        print("creating client connection from:", user_id)
-        clients[user_id] = NyaLink(ws)
-    await asyncio.Future()
+if __name__ == '__main__':
+    sys.stdout, sys.stderr, sys.stdin = Unbuffered(sys.stdout), Unbuffered(sys.stderr), Unbuffered(sys.stdin)
+    routes = web.RouteTableDef()
+    cache = Cache()
 
-app = web.Application()
-app.add_routes([web.get('/', websocket_handler)])
-# e
 
-sys.stdout, sys.stderr, sys.stdin = Unbuffered(sys.stdout), Unbuffered(sys.stderr), Unbuffered(sys.stdin)
+    @routes.get('/')
+    async def handle_websocket(request):
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        user_id = int(request.headers['user_id'])
+        try:
+            print("resuming client connection from:", user_id)
+            c = clients[user_id]
+            c.resume(ws)
+        except Exception:
+            print("creating client connection from:", user_id)
+            clients[user_id] = NyaLink(ws, user_id, cache)
 
-web.run_app(app)
+        await asyncio.Future()
+
+
+    @routes.get('/get_tracks')
+    async def get_tracks(request):
+        d = request.query
+        user_id = int(d['user'])
+        query = d.get('query', '')
+        try:
+            data = await request.json()
+        except Exception:
+            data = None
+
+        node = clients[user_id].get_best_node()
+
+        if query:
+            res = (await node.get_raw_track(query))
+        else:
+            res = await asyncio.gather(*[node.get_raw_track(query) for query in data])
+
+
+        return web.Response(text=dumps(res, indent=4))
+
+    @routes.get('/data')
+    async def return_player_data(request: aiohttp.web.Request):
+        d = request.query
+        user_id = int(d['user'])
+        guild_id = int(d['guild'])
+
+        user: NyaLink = clients[user_id]
+        player:  Player = user.players[guild_id]
+
+        return web.Response(text=dumps(player.json_data, indent=4))
+
+    @routes.get('/status')
+    async def status(request: aiohttp.web.Request):
+        #c = {
+        #    'clients': {
+        #        'nya': {
+        #            'connected': True,
+        #            },
+        #            'nodes': {
+        #                'FREE': {
+        #                    'stability': 1.111,
+        #                    'players': {
+        #                        '54+4//4': {
+        #                            'queue': 5
+        #                            'plauing': True,
+        #                            'loop': 0
+        #                        }
+        #                    }
+        #            }
+        #        }
+        #    }
+        #}
+
+
+        d = {}
+
+        for client in clients.values():
+            client: NyaLink
+            user_id = str(client.user_id)
+            d[user_id] = {}
+            d[user_id]['connected'] = not client.closed
+            d[user_id]['nodes'] = {}
+            for node in client.nodes.values():
+                node: Node
+                identifier = str(node.identifier)
+                d[user_id]['nodes'][identifier] = {}
+                d[user_id]['nodes'][identifier]['penalty'] = node.penalty
+                d[user_id]['nodes'][identifier]['players'] = {}
+                for player in node.players.values():
+                    player: Player
+                    guild_id = str(player.guild_id)
+
+                    d[user_id]['nodes'][identifier]['players'][guild_id] = {}
+                    d[user_id]['nodes'][identifier]['players'][guild_id]['queue'] = len(player.queue)
+                    d[user_id]['nodes'][identifier]['players'][guild_id]['playing'] = player.is_playing
+                    d[user_id]['nodes'][identifier]['players'][guild_id]['loop'] = player.queue.loop
+
+
+        return web.Response(text=dumps(d, indent=4))
+
+    @routes.post('/play_fetch')
+    async def play_fetch(request):
+        d = request.query
+        user_id = int(d['user'])
+        guild_id = int(d['guild'])
+        requester = int(d['requester'])
+        query = d.get('query', '')
+        data = await request.json()
+
+        client: NyaLink = clients[user_id]
+        player = client.get_player(guild_id)
+
+        if query:
+            await player.play_fetch(query, requester)
+        else:
+            await asyncio.gather(*[player.play_fetch(query, requester) for query in data])
+
+        return web.Response(text=dumps(player.json_data, indent=4))
+
+    @routes.post('/play_data')
+    async def play_data(request: aiohttp.web.Request):
+        d = request.query
+        user_id = int(d['user'])
+        guild_id = int(d['guild'])
+        requester = int(d['requester'])
+        query = d.get('query', '')
+        data = await request.json()
+
+        client: NyaLink = clients[user_id]
+        player = client.get_player(guild_id)
+
+        for d in data:
+            await player.play_data(query, requester, d)
+
+        return web.Response(text=dumps(player.json_data, indent=4))
+
+    app = web.Application()
+    app.router.add_routes(routes)
+
+
+    web.run_app(app)

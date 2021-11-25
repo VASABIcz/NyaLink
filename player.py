@@ -1,5 +1,5 @@
 import time, re
-#from node import Node
+# from node import Node
 import asyncio
 import collections
 import itertools
@@ -7,6 +7,7 @@ import async_timeout
 import random as r
 
 URL_REG = re.compile(r'https?://(?:www\.)?.+')
+
 
 class Old:
     def __init__(self, len):
@@ -22,6 +23,7 @@ class Old:
     def get(self):
         return self._queue.pop(0)
 
+
 class Que:
     """This custom queue is specifically made for wavelink so u shouldn't use it anywhere else"""
 
@@ -33,7 +35,6 @@ class Que:
         self.loop = 0  # 0 = no loop, 1 = loop one, 2 = loop
 
         self._getters = collections.deque()
-
 
     def __getitem__(self, item):
         if isinstance(item, slice):
@@ -64,7 +65,6 @@ class Que:
         r.shuffle(self._queue)
         self._queue.insert(0, x1)
 
-
     def remove(self, index: int):
         del self._queue[index]
 
@@ -75,8 +75,7 @@ class Que:
         try:
             self._queue.insert(0, self._old.get())
         except IndexError:
-            ... # TODO smthing
-
+            ...  # TODO smthing
 
     def _put(self, item):
         self._queue.append(item)
@@ -100,10 +99,8 @@ class Que:
                 waiter.set_result(None)
                 break
 
-
     async def put(self, item):
         return self.put_nowait(item)
-
 
     def put_nowait(self, item):
         self._put(item)
@@ -113,7 +110,6 @@ class Que:
         if self.empty():
             raise Exception("random exc in que")
         return self._get()
-
 
     async def get(self):
         while self.empty():
@@ -142,6 +138,7 @@ class Que:
             if self._queue:
                 self._put(self._queue.pop(0))
 
+
 class Track:
     __slots__ = ('id',
                  'info',
@@ -158,7 +155,7 @@ class Track:
                  'thumb',
                  'requester_id')
 
-    def __init__(self, id_, info: dict,requester_id, query: str = None):
+    def __init__(self, id_, info: dict, requester_id, query: str = None):
         self.id = id_
         self.info = info
         self.query = query
@@ -187,6 +184,7 @@ class Track:
     def is_dead(self):
         return self.dead
 
+
 class Player:
     def __init__(self, guild_id, node):
         self.guild_id = guild_id
@@ -209,6 +207,53 @@ class Player:
         self.queue = Que()
         self.waiting = False
         self.ignore = False
+
+        self.deafen = False
+        self.mute = False
+
+    @property
+    def json_data(self) -> dict:
+        res = {}
+        res['queue'] = [{'track': x.info, 'requester': x.requester_id} for x in self.queue]
+        res['paused'] = self.paused
+        res['loop'] = self.queue.loop
+        res['volume'] = self.volume
+        res['channel'] = self.channel_id
+        res['position'] = self.position
+        res['playing'] = self.is_playing
+
+        return res
+
+    @property
+    def is_connected(self) -> bool:
+        return self.channel_id is not None
+
+    @property
+    def is_playing(self) -> bool:
+        return self.is_connected and self.current is not None
+
+    @property
+    def is_paused(self) -> bool:
+        return self.paused
+
+    @property
+    def position(self):
+        if not self.is_playing:
+            return 0
+
+        if not self.current:
+            return 0
+
+        if self.paused:
+            return min(self.last_position, self.current.duration)
+
+        difference = (time.time() * 1000) - self.last_update
+        position = self.last_position + difference
+
+        if position > self.current.duration:
+            return 0
+
+        return min(position, self.current.duration)
 
     async def do_next(self) -> None:
         if self.is_playing or self.waiting:
@@ -258,7 +303,7 @@ class Player:
             for track in tracks:
                 await self.queue.put(track)
         else:
-            ... # send error
+            ...  # send error
         if not self.is_playing:
             print("do_next")
             self.ignore = True
@@ -267,46 +312,15 @@ class Player:
     async def play_data(self, query, requester, *tracks):
         if tracks:
             for track in tracks:
-                await self.queue.put(Track(track['id'], track['data'], requester, query))#
+                await self.queue.put(Track(track['id'], track['data'], requester, query))
         else:
-            ... # send error
+            ...  # send error
 
         if not self.is_playing:
             await self.do_next()
 
-    @property
-    def is_connected(self) -> bool:
-        return self.channel_id is not None
-
-    @property
-    def is_playing(self) -> bool:
-        return self.is_connected and self.current is not None
-
-    @property
-    def is_paused(self) -> bool:
-        return self.paused
-
-    @property
-    def position(self):
-        if not self.is_playing:
-            return 0
-
-        if not self.current:
-            return 0
-
-        if self.paused:
-            return min(self.last_position, self.current.duration)
-
-        difference = (time.time() * 1000) - self.last_update
-        position = self.last_position + difference
-
-        if position > self.current.duration:
-            return 0
-
-        return min(position, self.current.duration)
-
     async def update_state(self, state: dict) -> None:
-        state = state['state']  #
+        state = state['state']
         self.last_update = time.time() * 1000
         self.last_position = state.get('position', 0)
         self.position_timestamp = state.get('time', 0)
@@ -368,20 +382,21 @@ class Player:
             await self.node.send(op='voiceUpdate', guildId=str(self.guild_id), **self._voice_state)
 
     async def _voice_server_update(self, data) -> None:
-        self._voice_state.update({
-            'event': data
-        })
-
         # await self._dispatch_voice_update()
-        if data != self.voice_server:
+        if data != self.voice_server or not self.is_playing:
             print("voice server changed")
+            self._voice_state.update({
+                'event': data
+            })
             await self._dispatch_voice_update()
             self.voice_server = data
+        else:
+            await self._dispatch_voice_update()
 
     async def _voice_state_update(self, data) -> None:
         try:
             channel_id = int(data['channel_id'])
-        except:
+        except ValueError:
             channel_id = None
 
         if self.channel_id != channel_id:
@@ -407,15 +422,22 @@ class Player:
                 await self._dispatch_voice_update()
             self.channel_id = channel_id
 
-        elif self._voice_state['sessionId'] != data['session_id']:
-            print("VOICE SESSION CHANGE")
+        # elif self._voice_state['sessionId'] != data['session_id'] or not self.is_playing:
+        #     print("VOICE SESSION CHANGE")
+        #     self._voice_state.update({
+        #         'sessionId': data['session_id']
+        #     })
+        #     await self._dispatch_voice_update()4#
+        elif self.deafen == data['deaf'] and self.mute == data['mute']:
+            print("FIX VC event")
             self._voice_state.update({
                 'sessionId': data['session_id']
             })
             await self._dispatch_voice_update()
-
-
-
+        else:
+            print("DEF/MUTE event")
+            self.deafen = data['deaf']
+            self.mute = data['mute']
 
         # if not channel_id:  # We're disconnecting
         #     print("disconnecting")
@@ -424,90 +446,42 @@ class Player:
         #     self.queue.clear()
         #     await self.teardown()
         #     return
-#
-        # if self.channel_id != channel_id:
-        #     print(self.channel_id, channel_id)
-        #     print("DISPATCHEEEEEEEEEEEEEE")
-        #     await self._dispatch_voice_update()
-#
-        # if self.channel_id and self.channel_id != channel_id:
-        #     await self.set_pause(True)
-        #     await asyncio.sleep(0.3)
-        #     await self.set_pause(False)
-#
-        # self.channel_id = channel_id
 
 
+    async def change_node(self, identifier: str = None) -> None:
+        client = self.node.client
+        print(f"changing node for:", self.guild_id)
+        # looks like it works cant confirm lava.link had some load issues
+        # TODO spin up more lavalink instances and test it
 
-    # @property
-    # def equalizer(self):
-    #     return self._equalizer
-
-    # @property
-    # def eq(self):
-    #     return self.equalizer
-    # async def hook(self, event) -> None:
-    #     if isinstance(event, TrackEnd) and not self._new_track:
-    #         self.current = None
-    #     self._new_track = False
-
-    # async def _voice_server_update(self, data) -> None:
-    #   self._voice_state.update({
-    #       'event': data
-    #   })
-    #   await self._dispatch_voice_update()
-    #   async def _voice_state_update(self, data) -> None:
-    #     self._voice_state.update({
-    #         'sessionId': data['session_id']
-    #     })
-    #     channel_id = data['channel_id']
-    #     if not channel_id:  # We're disconnecting
-    #         self.channel_id = None
-    #         self._voice_state.clear()
-    #         return
-    #     self.channel_id = int(channel_id)
-    #     await self._dispatch_voice_update()
-    #     async def _dispatch_voice_update(self) -> None:
-    #       if {'sessionId', 'event'} == self._voice_state.keys():
-    #           await self.node.send(op='voiceUpdate', guildId=str(self.guild_id), **self._voice_state)
-
-    # async def set_eq(self, equalizer: Equalizer) -> None:
-    #     await self.node.send(op='equalizer', guildId=str(self.guild_id), bands=equalizer.eq)
-    #     self._equalizer = equalizer
-
-    # TODO implement
-    # async def change_node(self, identifier: str = None) -> None:
-    #     client = self.node._client  #
-    #     if identifier:
-    #         node = client.get_node(identifier)  #
-    #         if not node:
-    #             raise WavelinkException(f'No Nodes matching identifier:: {identifier}')
-    #         elif node == self.node:
-    #             raise WavelinkException('Node identifiers must not be the same while changing.')
-    #     else:
-    #         self.node.close()
-    #         node = None #
-    #         if self.node.region:
-    #             node = client.get_node_by_region(self.node.region)  #
-    #         if not node and self.node.shard_id:
-    #             node = client.get_node_by_shard(self.node.shard_id) #
-    #         if not node:
-    #             node = client.get_best_node()   #
-    #         if not node:
-    #             self.node.open()
-    #             raise WavelinkException('No Nodes available for changeover.')   #
-    #     self.node.open()    #
-    #     old = self.node
-    #     del old.players[self.guild_id]
-    #     await old.send(op='destroy', guildId=str(self.guild_id))   #
-    #     self.node = node
-    #     self.node.players[int(self.guild_id)] = self    #
-    #     if self._voice_state:
-    #         await self._dispatch_voice_update() #
-    #     if self.current:
-    #         await self.node.send(op='play', guildId=str(self.guild_id), track=self.current.id, startTime=int(self.position))
-    #         self.last_update = time.time() * 1000   #
-    #         if self.paused:
-    #             await self.node.send(op='pause', guildId=str(self.guild_id), pause=self.paused)    #
-    #     if self.volume != 100:
-    #         await self.node.send(op='volume', guildId=str(self.guild_id), volume=self.volume)
+        if identifier:
+            node = client.get_node(identifier)
+            if not node:
+                print("node not found")
+                return
+            elif node == self.node:
+                print("node is is same as current node")
+                return
+        else:
+            self.node.close()
+            node = client.get_best_node()
+            self.node.open()
+            print(node)
+            if not node:
+                print("no other node to move players")
+                return
+        old = self.node
+        del old.players[self.guild_id]
+        await old.send(op='destroy', guildId=str(self.guild_id))
+        self.node = node
+        self.node.players[self.guild_id] = self
+        if self._voice_state:
+            await self._dispatch_voice_update()
+        if self.current:
+            await self.node.send(op='play', guildId=str(self.guild_id), track=self.current.id,
+                                  startTime=int(self.position))
+            self.last_update = time.time() * 1000
+            if self.paused:
+                await self.node.send(op='pause', guildId=str(self.guild_id), pause=self.paused)
+        if self.volume != 100:
+            await self.node.send(op='volume', guildId=str(self.guild_id), volume=self.volume)

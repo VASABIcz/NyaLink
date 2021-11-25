@@ -1,6 +1,7 @@
 import aiohttp, asyncio, traceback
 from backoff import ExponentialBackoff
 from json import dumps
+from stats import  Stats
 
 
 class WebSocket:
@@ -35,12 +36,7 @@ class WebSocket:
 
             if not self.is_connected:
                 self.ws = await self.node.session.ws_connect(uri, headers=self.headers)
-        except Exception as e:
-            if isinstance(e, aiohttp.WSServerHandshakeError) and e.status == 401:
-                print(f'\nAuthorization Failed for Node:: {self.node}\n')
-            else:
-                traceback.print_exception(type(e), e, e.__traceback__)
-
+        except Exception:
             return
 
         if not self.task:
@@ -51,16 +47,18 @@ class WebSocket:
         print("connection established to", self.node.identifier)
 
     async def listen(self):
-        backoff = ExponentialBackoff(base=7)
-
         while True:
             msg = await self.ws.receive()
             if msg.type is aiohttp.WSMsgType.CLOSED:
-                self.closed = True
-                retry = backoff.delay()
-                await asyncio.sleep(retry)
-                if not self.is_connected:
-                    self.node.loop.create_task(self.connect())
+                for _ in range(5):
+                    print("trying to reconnect: ", self.node)
+                    self.closed = True
+                    await asyncio.sleep(2)
+                    if not self.is_connected:
+                        self.node.loop.create_task(self.connect())
+                print(f"destroying node:", self.node)
+                await self.node.destroy()
+                self.task.close()
             else:
                 self.node.loop.create_task(self.process_data(msg.json()))
 
@@ -71,7 +69,8 @@ class WebSocket:
             return
 
         if op == 'stats':
-            ... # TODO maybe stats
+            self.node.stats = Stats(self.node, data)
+            print(self.node)
         if op == 'event':
             try:
                 data['player'] = self.node.players[int(data['guildId'])]
@@ -94,6 +93,8 @@ class WebSocket:
             except:
                 pass
         elif name == 'TrackExceptionEvent':
+            if data['exception']['severity'] == 'SUSPICIOUS':  # AMOGUS, ehmmm..., it actaly gets fired when node drops we dont want our song to skip so ignore :)
+                return
             try:
                 await data.get('player').on_track_stop()
             except:
@@ -105,9 +106,8 @@ class WebSocket:
                 pass
         # elif name == 'TrackStartEvent':
         #     return 'on_track_start', TrackStart(data)
-        # elif name == 'WebSocketClosedEvent':
-        #     return 'on_websocket_closed', WebsocketClosed(data)
-        # TODO WebSocketClosedEvent i guess teardown
+        elif name == 'WebSocketClosedEvent':
+            print("CLOSEEEEEEEEEEEEEEEEED", data)
 
     async def send(self, **data):
         if self.is_connected:
