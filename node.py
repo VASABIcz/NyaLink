@@ -1,8 +1,13 @@
 import asyncio
-from websocket import WebSocket
-from backoff import ExponentialBackoff
+import re
 from urllib.parse import quote
+
+from backoff import ExponentialBackoff
 from player import Track
+from websocket import WebSocket
+
+URL_REG = re.compile(r'https?://(?:www\.)?.+')
+
 
 class Node:
     def __init__(self, host: str,
@@ -64,12 +69,12 @@ class Node:
 
     async def connect(self):
         self.ws = WebSocket(
-            node = self,
-            host = self.host,
-            port = self.port,
-            password = self.password,
-            user_id = self.user_id,
-            secure = self.secure,
+            node=self,
+            host=self.host,
+            port=self.port,
+            password=self.password,
+            user_id=self.user_id,
+            secure=self.secure,
         )
         await self.ws.connect()
 
@@ -78,9 +83,8 @@ class Node:
         await self.ws.send(**data)
 
     async def destroy(self, *, force: bool = False) -> None:
-        # TODO if not force move players to other node
+        # TODO if not force move players to other node done
         players = self.players.copy()
-        print(players)
 
         for player in players.values():
             if force:
@@ -104,13 +108,17 @@ class Node:
         print("querying track", query, self.rest_uri)
 
         if cache:
-            res = self.client.cache.get(query)
+            res = await self.client.cache.get(query)
             if res:
                 print("cached")
                 return res
 
+        if URL_REG.match(query):
+            lava_query = query
+        else:
+            lava_query = f"ytsearch:{query}"
         for attempt in range(5):
-            async with self.session.get(f'{self.rest_uri}/loadtracks?identifier={quote(query)}',
+            async with self.session.get(f'{self.rest_uri}/loadtracks?identifier={quote(lava_query)}',
                                         headers={'Authorization': self.password}) as resp:
 
                 print("query track response", resp.status)
@@ -121,7 +129,6 @@ class Node:
                     continue
 
                 data = await resp.json()
-                print(data)
 
                 if not data['tracks']:
                     retry = backoff.delay()
@@ -132,14 +139,14 @@ class Node:
                 print("fetched")
                 if data['playlistInfo']:
                     for track in data['tracks']:
-                        self.client.cache.put(track['info']['title'], [track])
-                    self.client.cache.put(query, [data['tracks']])
+                        await self.client.cache.put(track['info']['title'], [track])
+                    await self.client.cache.put(query, data['tracks'])
 
                     return data['tracks']
 
                 for track in data['tracks']:
-                    self.client.cache.put(track['info']['title'], [track])
-                self.client.cache.put(query, [data['tracks'][0]])
+                    await self.client.cache.put(track['info']['title'], [track])
+                await self.client.cache.put(query, [data['tracks'][0]])
 
                 return [data['tracks'][0]]
 
